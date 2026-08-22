@@ -2,6 +2,15 @@
 
 ## 2.x.x (to be released)
 
+### OIDC login
+
+Bugsink can log users in through an OpenID Connect provider. Set `OIDC_DISCOVERY_URL`, `OIDC_CLIENT_ID` and
+`OIDC_CLIENT_SECRET` (and register `BASE_URL` + `/accounts/oidc/callback/` as the redirect URI with your provider) and
+the login screen becomes a single "Login with OIDC" button. The email address from the provider is matched against
+accounts that already exist: Bugsink does not create or update accounts on OIDC login. Logging in with a password (and
+the password-reset request that leads to it) is turned off while OIDC is configured; `bugsink-manage
+create_set_password_link` remains available as a way back in.
+
 ### Backwards incompatible changes
 
 Some _very ancient_ migration files, long since squashed and replaced, have been removed. In the unlikely event that

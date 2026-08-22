@@ -142,6 +142,15 @@ BUGSINK = {
     "USER_REGISTRATION_VERIFY_EMAIL_EXPIRY":
         int(os.getenv("USER_REGISTRATION_VERIFY_EMAIL_EXPIRY", 7 * 24 * 60 * 60)),  # 7 days
 
+    # OIDC login: setting OIDC_DISCOVERY_URL (plus client id/secret) turns the login screen into a single "Login with
+    # OIDC" button and turns off logging in with a password. Users are matched (by email) against accounts that already
+    # exist; Bugsink neither creates nor updates accounts on OIDC login. Register BASE_URL + /accounts/oidc/callback/
+    # as the redirect URI with your provider.
+    "OIDC_DISCOVERY_URL": os.getenv("OIDC_DISCOVERY_URL", ""),
+    "OIDC_CLIENT_ID": os.getenv("OIDC_CLIENT_ID", ""),
+    "OIDC_CLIENT_SECRET": os.getenv("OIDC_CLIENT_SECRET", ""),
+    "OIDC_SCOPES": os.getenv("OIDC_SCOPES", "openid email"),
+
     # if True, there is only one team, and all projects are in that team
     "SINGLE_TEAM": os.getenv("SINGLE_TEAM", "False").lower() in ("true", "1", "yes"),
     "TEAM_CREATION": os.getenv("TEAM_CREATION", CB_MEMBERS),  # who can create new teams.
