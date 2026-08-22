@@ -28,7 +28,8 @@ from events.sparklines import get_issue_event_sparkline, get_issue_list_event_sp
 from events.ua_stuff import get_contexts_enriched_with_ua
 
 from projects.models import ProjectMembership, get_issue_accessible_project_ids
-from tags.search import search_issues, search_events, search_events_optimized
+from tags.search import (
+    search_issues, search_events, search_events_optimized, get_environments, filter_issues_by_environment)
 from theme.templatetags.issues import timestamp_with_millis
 
 from .models import (
@@ -219,6 +220,13 @@ def _filter_issue_list_by_state(issue_list, state_filter):
     return d_state_filter[state_filter](issue_list)
 
 
+def _get_issue_environment(request, project_ids):
+    """The selected environment (validated against the ones actually seen) and the list to pick from."""
+    environments = get_environments(project_ids)
+    environment = request.GET.get("environment", "")
+    return (environment if environment in environments else ""), environments
+
+
 def _get_issue_list_sort(request):
     sort = request.GET.get("sort", "last_seen")
     return sort if sort in ISSUE_LIST_SORTS else "last_seen"
@@ -233,6 +241,10 @@ def _issue_list_pt_2(request, project, state_filter, unapplied_issue_ids):
 
     if request.GET.get("q"):
         issue_list = search_issues(project, issue_list, request.GET["q"])
+
+    environment, environments = _get_issue_environment(request, [project.id])
+    if environment:
+        issue_list = filter_issues_by_environment(issue_list, [project.id], environment)
 
     paginator = UncountablePaginator(issue_list, 250)
     page_number = request.GET.get("page")
@@ -262,6 +274,8 @@ def _issue_list_pt_2(request, project, state_filter, unapplied_issue_ids):
         "disable_unmute_buttons": state_filter in ("resolved", "open"),
         "q": request.GET.get("q", ""),
         "sort": sort,
+        "environment": environment,
+        "environments": environments,
         "page_obj": page_obj,
     })
 
@@ -272,6 +286,10 @@ def _global_issue_list_pt_2(request, accessible_project_ids, state_filter, unapp
         Issue.objects.filter(project_id__in=accessible_project_ids, is_deleted=False),
         state_filter,
     ).select_related("project").order_by(*ISSUE_LIST_SORTS[sort])
+
+    environment, environments = _get_issue_environment(request, accessible_project_ids)
+    if environment:
+        issue_list = filter_issues_by_environment(issue_list, accessible_project_ids, environment)
 
     paginator = UncountablePaginator(issue_list, 250)
     page_number = request.GET.get("page")
@@ -297,6 +315,8 @@ def _global_issue_list_pt_2(request, accessible_project_ids, state_filter, unapp
         "disable_unmute_buttons": state_filter in ("resolved", "open"),
         "q": "",
         "sort": sort,
+        "environment": environment,
+        "environments": environments,
         "page_obj": page_obj,
     })
 

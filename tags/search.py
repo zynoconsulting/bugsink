@@ -5,7 +5,7 @@ least it means we have all of this together in a separate file this way.
 """
 
 import re
-from django.db.models import Q, Subquery, Count
+from django.db.models import Q, Subquery, Count, Exists, OuterRef
 from collections import namedtuple
 
 from bugsink.moreiterutils import tuplewise
@@ -104,6 +104,34 @@ def _search(m2m_qs, fk_fieldname, project, obj_list, q):
     obj_list = obj_list.filter(_and_join(clauses))
 
     return obj_list
+
+
+ENVIRONMENT_TAG_KEY = "environment"
+
+
+def get_environments(project_ids):
+    """The environments seen in the given projects, as a sorted list of distinct values."""
+
+    # The number of environments is expected to be small (a handful per project); this is what makes both a dropdown
+    # and the filter below reasonable things to offer.
+    return sorted(set(TagValue.objects.filter(
+        key__project_id__in=project_ids, key__key=ENVIRONMENT_TAG_KEY).values_list("value", flat=True)))
+
+
+def filter_issues_by_environment(issue_list, project_ids, environment):
+    """Restrict issue_list to the issues that have been seen in `environment`."""
+
+    # Exists() rather than the id__in-subquery that _search uses: this filter is applied to an ordered, paginated list,
+    # and Exists() lets the DB walk that list in its index order and stop once the page is full, rather than first
+    # materializing the ids of every issue in the environment. That's what makes this affordable on the (cross-project)
+    # global list, where a single environment ("production") typically matches nearly everything.
+    value_ids = list(TagValue.objects.filter(
+        key__project_id__in=project_ids, key__key=ENVIRONMENT_TAG_KEY, value=environment).values_list("id", flat=True))
+
+    if not value_ids:
+        return issue_list.none()
+
+    return issue_list.filter(Exists(IssueTag.objects.filter(issue=OuterRef("pk"), value_id__in=value_ids)))
 
 
 def search_issues(project, issue_list, q):

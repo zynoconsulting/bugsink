@@ -27,6 +27,11 @@ A new alert fires when an issue's event count reaches an order of magnitude: 10,
 once per milestone. It goes to messaging services only (not email) and can be turned off per project with
 `alert_on_volume_milestone`.
 
+### Filtering issues by environment
+
+The project issue list and the global issue list have an environment dropdown, listing the environments actually seen
+in the project(s) at hand. It combines with the existing search and sort.
+
 ### Backwards incompatible changes
 
 Some _very ancient_ migration files, long since squashed and replaced, have been removed. In the unlikely event that
