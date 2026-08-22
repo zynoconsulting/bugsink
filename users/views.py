@@ -1,7 +1,9 @@
+import secrets
 from datetime import timedelta
 
 from django.contrib.auth import login
 from django.contrib.auth import update_session_auth_hash
+from django.contrib.auth import views as auth_views
 from django.contrib.auth.forms import PasswordChangeForm
 from django.shortcuts import render, redirect, reverse
 from django.contrib.auth import get_user_model
@@ -9,14 +11,17 @@ from django.http import Http404
 from django.utils import timezone
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
+from django.utils.crypto import constant_time_compare
 from django.utils.translation import gettext as _
 from django.utils import translation
 
 from bugsink.app_settings import get_settings, CB_ANYBODY
 from bugsink.decorators import atomic_for_request_method
 from bugsink.middleware import get_chosen_language
+from bugsink.transaction import immediate_atomic
 from bugsink.utils import is_safe_next_url
 
+from . import oidc
 from .forms import (
     UserCreationForm, ResendConfirmationForm, RequestPasswordResetForm, SetPasswordForm, PreferencesForm, UserEditForm)
 from .models import EmailVerification
@@ -80,6 +85,81 @@ def user_edit(request, user_pk):
         form = UserEditForm(instance=user)
 
     return render(request, "users/user_edit.html", {"form": form})
+
+
+def login_view(request):
+    if not oidc.is_enabled():
+        return auth_views.LoginView.as_view(template_name="bugsink/login.html")(request)
+
+    if request.method == 'POST':
+        # When OIDC is configured it is the only way in; we don't leave an unadvertised password-door open. Locked out
+        # because your provider is unreachable? `manage.py create_set_password_link` still works.
+        raise Http404("Password login is disabled when OIDC login is configured.")
+
+    return render(request, "bugsink/login.html", {
+        "oidc_enabled": True,
+        "next": request.GET.get("next", ""),
+    })
+
+
+def _oidc_redirect_uri():
+    # BASE_URL rather than the current request's host: this must match the redirect URI registered with the provider.
+    return get_settings().BASE_URL + reverse("oidc_callback")
+
+
+def _oidc_failed(request, error):
+    return render(request, "bugsink/login.html", {"oidc_enabled": True, "oidc_error": str(error)}, status=403)
+
+
+def oidc_login(request):
+    if not oidc.is_enabled():
+        raise Http404("OIDC login is not configured.")
+
+    state = secrets.token_urlsafe(32)
+    code_verifier, code_challenge = oidc.make_pkce_pair()
+
+    request.session["oidc_state"] = state
+    request.session["oidc_code_verifier"] = code_verifier
+    request.session["oidc_next"] = request.GET.get("next", "")
+
+    try:
+        return redirect(oidc.authorization_url(_oidc_redirect_uri(), state, code_challenge))
+    except oidc.OIDCError as e:
+        return _oidc_failed(request, e)
+
+
+def oidc_callback(request):
+    if not oidc.is_enabled():
+        raise Http404("OIDC login is not configured.")
+
+    state = request.session.pop("oidc_state", None)
+    code_verifier = request.session.pop("oidc_code_verifier", None)
+    next_url = request.session.pop("oidc_next", "")
+
+    try:
+        if request.GET.get("error"):
+            raise oidc.OIDCError(_("The identity provider refused the login request."))
+
+        if not state or not constant_time_compare(request.GET.get("state", ""), state):
+            raise oidc.OIDCError(_("This login request has expired or was tampered with. Please try again."))
+
+        if not request.GET.get("code"):
+            raise oidc.OIDCError(_("The identity provider did not return an authorization code."))
+
+        # the talking-to-the-provider part is intentionally outside of the (write) transaction below
+        access_token = oidc.exchange_code(request.GET["code"], _oidc_redirect_uri(), code_verifier)
+        email = oidc.get_email(access_token)
+
+        with immediate_atomic():
+            login(request, oidc.find_user(email))
+
+    except oidc.OIDCError as e:
+        return _oidc_failed(request, e)
+
+    if not is_safe_next_url(next_url, request):
+        next_url = reverse("home")
+
+    return redirect(next_url)
 
 
 @atomic_for_request_method
@@ -164,6 +244,10 @@ def resend_confirmation(request):
 def request_reset_password(request):
     # something like this exists in Django too; copy-paste-modify from the other views was more simple than thoroughly
     # understanding the Django implementation and hooking into it.
+
+    if oidc.is_enabled():
+        # setting a password ends in a logged-in user, i.e. this is password login by another name (and thus disabled).
+        raise Http404("Password reset is not available when OIDC login is configured.")
 
     if request.method == 'POST':
         form = RequestPasswordResetForm(request.POST)

@@ -15,7 +15,10 @@
 
         <div class="p-12 md:pt-24 md:pl-24 md:pr-24 md:pb-16">
 
-            {% if form.errors %}
+            {% if oidc_error %}
+                <div class="mb-8 text-red-500 dark:text-red-400">{{ oidc_error }}</div>
+
+            {% elif form.errors %}
                 {% for error in form.non_field_errors %}
                     <div class="mb-8 text-red-500 dark:text-red-400">{{ error }}</div>
                 {% endfor %}
@@ -28,6 +31,10 @@
                 {% endif %}
             {% endif %}
 
+            {% if oidc_enabled %}
+            <a href="{% url 'oidc_login' %}{% if next %}?next={{ next|urlencode }}{% endif %}" class="bg-slate-800 block font-medium p-2 md:p-4 text-center text-white uppercase w-full">{% translate "Login with OIDC" %}</a>
+
+            {% else %}
             <form method="post" action="{% url 'login' %}">
                 {% csrf_token %}
 
@@ -43,6 +50,7 @@
                 <a href="{% url 'request_reset_password' %}" class="text-slate-800 dark:text-slate-100">{% translate "Forgot password?" %}</a>
                 {% if registration_enabled %}<a href="{% url 'signup' %}" class="float-right text-slate-800 dark:text-slate-100">{% translate "Create an account" %}</a>{% endif %}
             </div>
+            {% endif %}
         </div>
 
     </div>
