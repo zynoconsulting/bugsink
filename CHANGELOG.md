@@ -36,6 +36,22 @@ Alerts can now be sent to Google Chat spaces using incoming webhooks. See #326.
 
 ## 2.5.1 (31 August 2026)
 
+### Slack bot alerts, per-environment routing, and volume milestones
+
+Alerts can now be posted to a Slack channel of your choosing with a bot token: set `SLACK_BOT_TOKEN` (one per
+installation, needs the `chat:write` scope) and pick the "Slack (bot)" kind when adding a messaging service; the
+channel ID is configured per service. This is what incoming webhooks cannot do, since those are tied to whatever
+channel the app was installed into.
+
+Every messaging service (not just the Slack bot) now has an optional _environment_: leave it blank to get alerts for
+all environments, or set it to route only that environment's alerts to that channel. Alerts that cannot be attributed
+to an environment (the triggering event doesn't have one) only go to the blank/all services. Email alerts are not
+environment-scoped. The environment is now also included in the alerts themselves, for all messaging backends.
+
+A new alert fires when an issue's event count reaches an order of magnitude: 10, 100, 1000 events and so on, at most
+once per milestone. It goes to messaging services only (not email) and can be turned off per project with
+`alert_on_volume_milestone`.
+
 ### Backwards incompatible changes
 
 Some _very ancient_ migration files, long since squashed and replaced, have been removed. In the unlikely event that

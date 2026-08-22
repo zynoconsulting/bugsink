@@ -144,7 +144,7 @@ def mattermost_backend_send_test_message(webhook_url, project_name, display_name
 @shared_task
 def mattermost_backend_send_alert(
         webhook_url, issue_id, state_description, alert_article, alert_reason, service_config_id, unmute_reason=None,
-        channel=None):
+        channel=None, milestone_reason=None, environment=None):
 
     issue = Issue.objects.get(id=issue_id)
 
@@ -163,6 +163,9 @@ def mattermost_backend_send_alert(
     if unmute_reason:
         data["attachments"][0]["text"] += "\n\n" + _safe_markdown(unmute_reason)
 
+    if milestone_reason:
+        data["attachments"][0]["text"] += "\n\n" + _safe_markdown(milestone_reason)
+
     # assumption: visavis email, project.name is of less importance, because in slack-like things you may (though not
     # always) do one-channel per project. more so for site_title (if you have multiple Bugsinks, you'll surely have
     # multiple slack channels)
@@ -171,11 +174,12 @@ def mattermost_backend_send_alert(
         "value": _safe_markdown(issue.project.name),
     }]
 
+    if environment:
+        fields.append({"title": "Environment", "value": _safe_markdown(environment)})
+
     # left as a (possible) TODO, because the amount of refactoring (passing event to this function) is too big for now
     # if event.release:
     #     fields.append({"title": "Release", "value": _safe_markdown(event.release)})
-    # if event.environment:
-    #     fields.append("title": "Environment", "value": _safe_markdown(event.environment)})
 
     data["attachments"][0]["fields"] += fields
 

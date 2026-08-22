@@ -1,7 +1,7 @@
 from django.db import models
 from projects.models import Project
 
-from .service_backends.slack import SlackBackend
+from .service_backends.slack import SlackBackend, SlackBotBackend
 from .service_backends.mattermost import MattermostBackend
 from .service_backends.discord import DiscordBackend
 from .service_backends.telegram import TelegramBackend
@@ -19,6 +19,7 @@ def get_alert_service_kind_choices():
         ("mattermost", "Mattermost"),
         ("msteams", "Microsoft Teams"),
         ("slack", "Slack"),
+        ("slackbot", "Slack (bot)"),
         ("telegram", "Telegram"),
         ("custom", "Custom"),
     ]
@@ -35,6 +36,8 @@ def get_alert_service_backend_class(kind):
         return MsTeamsBackend
     if kind == "slack":
         return SlackBackend
+    if kind == "slackbot":
+        return SlackBotBackend
     if kind == "telegram":
         return TelegramBackend
     if kind == "custom":
@@ -48,6 +51,12 @@ class MessagingServiceConfig(models.Model):
                                     help_text='For display in the UI, e.g. "#general on company Slack"')
 
     kind = models.CharField(choices=get_alert_service_kind_choices, max_length=20, default="slack")
+
+    # Blank means "all environments"; when set, only events from that environment trigger an alert here. Alerts that we
+    # cannot attribute to an environment (i.e. the triggering event has none) only reach the blank ("all") services.
+    environment = models.CharField(
+        max_length=64, blank=True, default="",
+        help_text="Only alert for this environment; leave blank to alert for all environments")
 
     config = models.TextField(blank=False)
 

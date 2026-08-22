@@ -24,7 +24,7 @@ from .service_backends.discord import DiscordConfigForm
 from .service_backends.mattermost import MattermostConfigForm
 from .service_backends.msteams import msteams_backend_send_test_message, msteams_backend_send_alert
 from .service_backends.msteams import MsTeamsConfigForm
-from .service_backends.slack import SlackConfigForm
+from .service_backends.slack import SlackBotConfigForm, SlackConfigForm, slackbot_backend_send_alert
 from .service_backends.telegram import (
     MASKED,
     TelegramBackend,
@@ -39,7 +39,14 @@ from .service_backends.google_chat import (
 )
 from .service_backends.custom import CustomBackendForm, custom_backend_send_test_message, custom_backend_send_alert
 from .service_backends.webhook_security import _embedded_ipv4_addresses, validate_webhook_url
-from .tasks import send_new_issue_alert, send_regression_alert, send_unmute_alert, _get_users_for_email_alert
+from .tasks import (
+    _get_users_for_email_alert,
+    is_order_of_magnitude,
+    send_new_issue_alert,
+    send_regression_alert,
+    send_unmute_alert,
+    send_volume_milestone_alert,
+)
 from .views import DEBUG_CONTEXTS
 from bugsink.app_settings import override_settings as override_bugsink_settings
 
@@ -1399,3 +1406,184 @@ class TestGoogleChatBackendErrorHandling(DjangoTestCase):
         self.assertIn(r"Ops \*on-call\* \<prod\>", payload["text"])
         self.assertIn(r"matched \*pattern\*", payload["text"])
         self.assertRegex(payload["text"], r"<https?://.+\|view on Bugsink>")
+
+
+class TestEnvironmentRouting(DjangoTestCase):
+    """A messaging service with an environment set only gets that environment's alerts."""
+
+    def setUp(self):
+        self.project = Project.objects.create(name="Test project")
+        self.issue, _ = get_or_create_issue(project=self.project)
+        create_event(project=self.project, issue=self.issue)
+
+        self.all_envs = self._service("https://hooks.example.com/all", "")
+        self.production = self._service("https://hooks.example.com/production", "production")
+        self.staging = self._service("https://hooks.example.com/staging", "staging")
+
+    def _service(self, webhook_url, environment):
+        return MessagingServiceConfig.objects.create(
+            project=self.project,
+            display_name=environment or "all",
+            kind="custom",
+            environment=environment,
+            config=json.dumps({"webhook_url": webhook_url}),
+        )
+
+    def _alerted_urls(self, mock_post):
+        return [call.args[0] for call in mock_post.call_args_list]
+
+    @patch("alerts.service_backends.base.BaseWebhookBackend.safe_post")
+    def test_alert_reaches_the_matching_and_the_catch_all_service(self, mock_post):
+        send_new_issue_alert(str(self.issue.id), "production")
+
+        self.assertEqual(
+            self._alerted_urls(mock_post),
+            ["https://hooks.example.com/all", "https://hooks.example.com/production"],
+        )
+
+    @patch("alerts.service_backends.base.BaseWebhookBackend.safe_post")
+    def test_alert_without_a_known_environment_only_reaches_the_catch_all_service(self, mock_post):
+        send_new_issue_alert(str(self.issue.id))
+
+        self.assertEqual(self._alerted_urls(mock_post), ["https://hooks.example.com/all"])
+
+    @patch("alerts.service_backends.base.BaseWebhookBackend.safe_post")
+    def test_the_environment_is_part_of_the_alert(self, mock_post):
+        send_regression_alert(str(self.issue.id), "staging")
+
+        payload = json.loads(mock_post.call_args.kwargs["data"])
+        self.assertEqual(payload["environment"], "staging")
+
+    @patch("alerts.service_backends.base.BaseWebhookBackend.safe_post")
+    def test_email_alerts_are_not_environment_scoped(self, mock_post):
+        user = User.objects.create_user(username="testuser", email="test@example.org")
+        ProjectMembership.objects.create(
+            project=self.project,
+            user=user,
+            send_email_alerts=True,
+            accepted=True,
+        )
+
+        send_new_issue_alert(str(self.issue.id), "production")
+
+        self.assertEqual(len(mail.outbox), 1)
+
+
+class TestVolumeMilestoneAlert(DjangoTestCase):
+
+    def test_is_order_of_magnitude(self):
+        self.assertEqual([n for n in range(1, 1001) if is_order_of_magnitude(n)], [10, 100, 1000])
+
+        self.assertTrue(is_order_of_magnitude(1_000_000))
+        self.assertFalse(is_order_of_magnitude(1_000_001))
+        self.assertFalse(is_order_of_magnitude(0))
+
+    @patch("alerts.service_backends.base.BaseWebhookBackend.safe_post")
+    def test_milestone_alert_posts_to_services_but_does_not_email(self, mock_post):
+        project = Project.objects.create(name="Test project")
+        user = User.objects.create_user(username="testuser", email="test@example.org")
+        ProjectMembership.objects.create(
+            project=project,
+            user=user,
+            send_email_alerts=True,
+            accepted=True,
+        )
+
+        MessagingServiceConfig.objects.create(
+            project=project,
+            display_name="all",
+            kind="custom",
+            config=json.dumps({"webhook_url": "https://hooks.example.com/all"}),
+        )
+
+        issue, _ = get_or_create_issue(project=project)
+        create_event(project=project, issue=issue)
+
+        send_volume_milestone_alert(str(issue.id), 1000, "production")
+
+        payload = json.loads(mock_post.call_args.kwargs["data"])
+        self.assertEqual(payload["alert_reason"], "GROWING")
+        self.assertEqual(payload["milestone_reason"], "Reached 1,000 events")
+        self.assertEqual(len(mail.outbox), 0)
+
+
+class TestSlackBotBackend(DjangoTestCase):
+
+    def setUp(self):
+        self.project = Project.objects.create(name="Test project")
+        self.config = MessagingServiceConfig.objects.create(
+            project=self.project,
+            display_name="#alerts",
+            kind="slackbot",
+            config=json.dumps({"channel_id": "C0123456789"}),
+        )
+        self.issue, _ = get_or_create_issue(project=self.project)
+        create_event(project=self.project, issue=self.issue)
+
+    def _ok_response(self, mock_post, ok=True, error=None):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"ok": ok} if ok else {"ok": False, "error": error}
+        mock_post.return_value = mock_response
+        return mock_response
+
+    @patch("alerts.service_backends.base.BaseWebhookBackend.safe_post")
+    def test_alert_is_posted_to_the_configured_channel_with_the_bot_token(self, mock_post):
+        self._ok_response(mock_post)
+
+        with override_bugsink_settings(SLACK_BOT_TOKEN="xoxb-token"):
+            slackbot_backend_send_alert(
+                "C0123456789",
+                str(self.issue.id),
+                "New issue",
+                "a",
+                "NEW",
+                self.config.id,
+                environment="production",
+            )
+
+        self.assertEqual(mock_post.call_args.args[0], "https://slack.com/api/chat.postMessage")
+        self.assertEqual(mock_post.call_args.kwargs["headers"]["Authorization"], "Bearer xoxb-token")
+
+        data = json.loads(mock_post.call_args.kwargs["data"])
+        self.assertEqual(data["channel"], "C0123456789")
+        self.assertIn({"type": "mrkdwn", "text": "*environment*: production"}, data["blocks"][2]["fields"])
+
+        self.config.refresh_from_db()
+        self.assertIsNone(self.config.last_failure_timestamp)
+
+    @patch("alerts.service_backends.base.BaseWebhookBackend.safe_post")
+    def test_slack_saying_not_ok_is_stored_as_a_failure(self, mock_post):
+        self._ok_response(mock_post, ok=False, error="not_in_channel")
+
+        with override_bugsink_settings(SLACK_BOT_TOKEN="xoxb-token"):
+            slackbot_backend_send_alert(
+                "C0123456789", str(self.issue.id), "New issue", "a", "NEW", self.config.id)
+
+        self.config.refresh_from_db()
+        self.assertIsNotNone(self.config.last_failure_timestamp)
+        self.assertIn("not_in_channel", self.config.last_failure_error_message)
+
+    @patch("alerts.service_backends.base.BaseWebhookBackend.safe_post")
+    def test_a_missing_token_is_stored_as_a_failure_rather_than_posted(self, mock_post):
+        with override_bugsink_settings(SLACK_BOT_TOKEN=""):
+            slackbot_backend_send_alert(
+                "C0123456789", str(self.issue.id), "New issue", "a", "NEW", self.config.id)
+
+        mock_post.assert_not_called()
+        self.config.refresh_from_db()
+        self.assertIn("SLACK_BOT_TOKEN", self.config.last_failure_error_message)
+
+    def test_config_form_requires_a_token_and_a_channel_id(self):
+        with override_bugsink_settings(SLACK_BOT_TOKEN=""):
+            form = SlackBotConfigForm(data={"channel_id": "C0123456789"})
+            self.assertFalse(form.is_valid())
+            self.assertIn("SLACK_BOT_TOKEN", str(form.errors))
+
+        with override_bugsink_settings(SLACK_BOT_TOKEN="xoxb-token"):
+            self.assertTrue(SlackBotConfigForm(data={"channel_id": "C0123456789"}).is_valid())
+
+            form = SlackBotConfigForm(data={"channel_id": "#general"})
+            self.assertFalse(form.is_valid())
+            self.assertIn("channel_id", form.errors)

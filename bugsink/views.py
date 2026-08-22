@@ -131,6 +131,10 @@ def settings_view(request):
             return v
         return {k: maybe_round(v) for k, v in settings.items()}
 
+    def hide_secrets(settings):
+        secrets = ["SLACK_BOT_TOKEN"]
+        return {k: ("********" if v else "") if k in secrets else v for k, v in settings.items()}
+
     misc_settings = {
         k: get_setting(settings, k) for k in (
             "ALLOWED_HOSTS",
@@ -151,7 +155,7 @@ def settings_view(request):
     }
 
     return render(request, "bugsink/settings.html", {
-        "bugsink_settings": round_values(get_bugsink_settings()),
+        "bugsink_settings": hide_secrets(round_values(get_bugsink_settings())),
         "snappea_settings": get_snappea_settings(),
         "misc_settings": misc_settings,
         "version": __version__,

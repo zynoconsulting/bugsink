@@ -11,7 +11,7 @@ class MessagingServiceConfigNewForm(ModelForm):
 
     class Meta:
         model = MessagingServiceConfig
-        fields = ["display_name", "kind"]
+        fields = ["display_name", "kind", "environment"]
 
     def save(self, commit=True):
         instance = super().save(commit=False)
@@ -28,4 +28,4 @@ class MessagingServiceConfigEditForm(ModelForm):
 
     class Meta:
         model = MessagingServiceConfig
-        fields = ["display_name"]
+        fields = ["display_name", "environment"]

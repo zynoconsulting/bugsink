@@ -41,7 +41,8 @@ from events.models import Event
 from events.retention import evict_for_max_events, should_evict, EvictionCounts
 from events.usage import record_event_counts
 from releases.models import create_release_if_needed
-from alerts.tasks import send_new_issue_alert, send_regression_alert
+from alerts.tasks import (
+    send_new_issue_alert, send_regression_alert, send_volume_milestone_alert, is_order_of_magnitude)
 from compat.timestamp import format_timestamp, parse_timestamp
 from tags.models import digest_tags
 from bsmain.utils import b108_makedirs
@@ -580,7 +581,7 @@ class BaseIngestAPIView(View):
             event.never_evict = True
 
             if project.alert_on_new_issue:
-                delay_on_commit(send_new_issue_alert, str(issue.id))
+                delay_on_commit(send_new_issue_alert, str(issue.id), event.environment)
 
         else:
             # new issues cannot be regressions by definition, hence this is in the 'else' branch
@@ -592,7 +593,7 @@ class BaseIngestAPIView(View):
                 event.never_evict = True
 
                 if project.alert_on_regression:
-                    delay_on_commit(send_regression_alert, str(issue.id))
+                    delay_on_commit(send_regression_alert, str(issue.id), event.environment)
 
                 IssueStateManager.reopen(issue)
 
@@ -611,6 +612,12 @@ class BaseIngestAPIView(View):
                 IssueStateManager.unmute(
                     issue, triggering_event=event,
                     unmute_metadata={"mute_for": {"unmute_after": issue.unmute_after}})
+
+        # note that issue.digested_event_count has already been incremented for the current event above; a new issue
+        # sits at 1, so the check below is correctly False for those.
+        if project.alert_on_volume_milestone and is_order_of_magnitude(issue.digested_event_count):
+            delay_on_commit(
+                send_volume_milestone_alert, str(issue.id), issue.digested_event_count, event.environment)
 
         cls.count_issue_periods_and_act_on_it(issue, event, digested_at)
 
