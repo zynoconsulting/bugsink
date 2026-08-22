@@ -151,6 +151,11 @@ BUGSINK = {
     "OIDC_CLIENT_SECRET": os.getenv("OIDC_CLIENT_SECRET", ""),
     "OIDC_SCOPES": os.getenv("OIDC_SCOPES", "openid email"),
 
+    # Alerting: a single Slack bot token (xoxb-...) for the whole installation; the channel to post to is configured
+    # per messaging service on the project's alerts page. The bot needs the chat:write scope and must be a member of
+    # each channel it posts to. In ALERTS_WEBHOOK_OUTBOUND_MODE=allowlist_only, allow slack.com.
+    "SLACK_BOT_TOKEN": os.getenv("SLACK_BOT_TOKEN", ""),
+
     # if True, there is only one team, and all projects are in that team
     "SINGLE_TEAM": os.getenv("SINGLE_TEAM", "False").lower() in ("true", "1", "yes"),
     "TEAM_CREATION": os.getenv("TEAM_CREATION", CB_MEMBERS),  # who can create new teams.

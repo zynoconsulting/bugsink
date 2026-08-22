@@ -165,7 +165,8 @@ def msteams_backend_send_test_message(webhook_url, project_name, display_name, s
 
 @shared_task
 def msteams_backend_send_alert(
-        webhook_url, issue_id, state_description, alert_article, alert_reason, service_config_id, unmute_reason=None):
+        webhook_url, issue_id, state_description, alert_article, alert_reason, service_config_id, unmute_reason=None,
+        milestone_reason=None, environment=None):
 
     issue = Issue.objects.get(id=issue_id)
 
@@ -186,23 +187,25 @@ def msteams_backend_send_alert(
         },
     ]
 
-    if unmute_reason:
-        body.append({
-            "type": "TextBlock",
-            "text": _safe_markdown(unmute_reason),
-            "wrap": True,
-        })
+    for reason in [unmute_reason, milestone_reason]:
+        if reason:
+            body.append({
+                "type": "TextBlock",
+                "text": _safe_markdown(reason),
+                "wrap": True,
+            })
 
     # assumption: visavis email, project.name is of less importance, because in slack-like things you may (though not
     # always) do one-channel per project. more so for site_title (if you have multiple Bugsinks, you'll surely have
     # multiple teams channels)
     facts = [{"title": "project", "value": _safe_markdown(issue.project.name)}]
 
+    if environment:
+        facts.append({"title": "environment", "value": _safe_markdown(environment)})
+
     # left as a (possible) TODO, because the amount of refactoring (passing event to this function) is too big for now
     # if event.release:
     #     facts.append({"title": "release", "value": _safe_markdown(event.release)})
-    # if event.environment:
-    #     facts.append({"title": "environment", "value": _safe_markdown(event.environment)})
 
     body.append({"type": "FactSet", "facts": facts})
 

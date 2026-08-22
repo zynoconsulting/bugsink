@@ -143,7 +143,8 @@ def discord_backend_send_test_message(
 
 @shared_task
 def discord_backend_send_alert(
-        webhook_url, issue_id, state_description, alert_article, alert_reason, service_config_id, unmute_reason=None):
+        webhook_url, issue_id, state_description, alert_article, alert_reason, service_config_id, unmute_reason=None,
+        milestone_reason=None, environment=None):
 
     issue = Issue.objects.get(id=issue_id)
 
@@ -174,17 +175,21 @@ def discord_backend_send_alert(
             {"name": "Unmute Reason", "value": unmute_reason, "inline": False}
         )
 
+    if milestone_reason:
+        embed["fields"].append(
+            {"name": "Milestone", "value": milestone_reason, "inline": False}
+        )
+
+    if environment:
+        embed["fields"].append(
+            {"name": "Environment", "value": environment, "inline": True}
+        )
+
     # left as a (possible) TODO, because the amount of refactoring (passing event to this function) is too big for now
     # if event.release:
     #     embed["fields"].append({
     #         "name": "Release",
     #         "value": event.release,
-    #         "inline": True
-    #     })
-    # if event.environment:
-    #     embed["fields"].append({
-    #         "name": "Environment",
-    #         "value": event.environment,
     #         "inline": True
     #     })
 

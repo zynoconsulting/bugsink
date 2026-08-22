@@ -167,15 +167,21 @@ def _build_test_message(project_name, display_name):
     )
 
 
-def _build_alert_message(issue, alert_reason, issue_url, unmute_reason=None):
+def _build_alert_message(issue, alert_reason, issue_url, unmute_reason=None, milestone_reason=None, environment=None):
     text = (
         "<b>" + _safe_html(truncatechars(issue.title(), 200)) + "</b>\n\n"
         f"{alert_reason} issue\n\n"
         "<b>Project:</b> " + _safe_html(issue.project.name)
     )
 
+    if environment:
+        text += "\n<b>Environment:</b> " + _safe_html(environment)
+
     if unmute_reason:
         text += "\n\n<b>Unmute Reason:</b> " + _safe_html(unmute_reason)
+
+    if milestone_reason:
+        text += "\n\n<b>Milestone:</b> " + _safe_html(milestone_reason)
 
     text += '\n\n<a href="' + html.escape(issue_url, quote=True) + '">View on Bugsink</a>'
     return text
@@ -224,6 +230,8 @@ def telegram_backend_send_alert(
     service_config_id,
     unmute_reason=None,
     message_thread_id=None,
+    milestone_reason=None,
+    environment=None,
 ):
 
     issue = Issue.objects.get(id=issue_id)
@@ -232,7 +240,9 @@ def telegram_backend_send_alert(
 
     data = {
         "chat_id": chat_id,
-        "text": _build_alert_message(issue, alert_reason, issue_url, unmute_reason=unmute_reason),
+        "text": _build_alert_message(
+            issue, alert_reason, issue_url, unmute_reason=unmute_reason, milestone_reason=milestone_reason,
+            environment=environment),
         "parse_mode": "HTML",
     }
 

@@ -113,6 +113,10 @@ class Project(models.Model):
     alert_on_regression = models.BooleanField(default=True)
     alert_on_unmute = models.BooleanField(default=True)
 
+    # an "order of magnitude" alert: the issue's event count passing 10, 100, 1_000, ... Messaging services only (see
+    # send_volume_milestone_alert).
+    alert_on_volume_milestone = models.BooleanField(default=True)
+
     # visibility
     visibility = models.IntegerField(
         _("Visibility"), choices=ProjectVisibility.choices, default=ProjectVisibility.TEAM_MEMBERS,

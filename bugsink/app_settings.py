@@ -47,6 +47,11 @@ DEFAULTS = {
     "OIDC_CLIENT_SECRET": "",
     "OIDC_SCOPES": "openid email",
 
+    # Alerting: a single Slack bot token (xoxb-...) for the whole installation; the channel to post to is configured
+    # per messaging service on the project's alerts page. The bot needs the chat:write scope and must be a member of
+    # each channel it posts to.
+    "SLACK_BOT_TOKEN": "",
+
     # if True, there is only one team, and all projects are in that team
     "SINGLE_TEAM": False,
     "TEAM_CREATION": CB_MEMBERS,  # who can create new teams. default: members, which means "any member of the site"

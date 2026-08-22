@@ -132,7 +132,7 @@ def settings_view(request):
         return {k: maybe_round(v) for k, v in settings.items()}
 
     def hide_secrets(settings):
-        secrets = ["OIDC_CLIENT_SECRET"]
+        secrets = ["OIDC_CLIENT_SECRET", "SLACK_BOT_TOKEN"]
         return {k: ("********" if v else "") if k in secrets else v for k, v in settings.items()}
 
     misc_settings = {
