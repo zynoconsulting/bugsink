@@ -36,6 +36,11 @@ Alerts can now be sent to Google Chat spaces using incoming webhooks. See #326.
 
 ## 2.5.1 (31 August 2026)
 
+### Filtering issues by environment
+
+The project issue list and the global issue list have an environment dropdown, listing the environments actually seen
+in the project(s) at hand. It combines with the existing search and sort.
+
 ### Backwards incompatible changes
 
 Some _very ancient_ migration files, long since squashed and replaced, have been removed. In the unlikely event that
