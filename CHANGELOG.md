@@ -1,6 +1,6 @@
 # Changes
 
-## 2.x.x (to be released)
+## 2.5.1 (31 August 2026)
 
 ### OIDC login
 
@@ -36,7 +36,53 @@ in the project(s) at hand. It combines with the existing search and sort.
 
 Some _very ancient_ migration files, long since squashed and replaced, have been removed. In the unlikely event that
 you are running a pre-1.2.0 release and have not yet run migrations, you will need to upgrade to any release from 1.2.0
-to 2.5.0 and run migrations, before upgrading to [2.x.x] or later.
+to 2.5.0 and run migrations before upgrading to 2.5.1 or later. See #470.
+
+### Security
+
+Fix: enforce the configured lifetime for email verification, password-reset and new-user setup links.
+
+The lifetime setting is expressed in seconds but was interpreted as days, so unused links remained valid far beyond
+their configured expiry. Bugsink now expires them after the configured number of seconds. See:
+
+https://github.com/bugsink/bugsink/security/advisories/GHSA-4f45-qmjf-82cv
+
+Fix: reject webhook targets with non-global IPv4 addresses embedded in IPv6 destinations.
+
+On installations with NAT64 routing, a project admin could use a globally classified IPv6 address that translated to
+a private, loopback or link-local IPv4 destination. Bugsink now applies the global-address requirement to IPv4
+addresses embedded in standard IPv6 transition formats. See:
+
+https://github.com/bugsink/bugsink/security/advisories/GHSA-qxqr-25p3-664q
+
+### Alert destinations
+
+Alerts can now be sent to Telegram, Microsoft Teams and custom webhook endpoints. Telegram supports channels, groups
+and topics, Microsoft Teams uses Power Automate Workflows, and custom webhooks receive a payload based on the canonical
+issue API. See #368, #433 and #461.
+
+### Stacktraces and log messages
+
+Log-message issues now use the actual message as their title instead of the generic "Log Message" label, including the
+formatted message when an SDK provides one. See #111 and #364.
+
+Stacktrace views now render thread-based stacktraces from message and log events, show multiple threads alongside
+exceptions, and support the deprecated top-level event stacktrace. See #471 and #482.
+
+### Smaller fixes
+
+* Accept events that do not specify a platform, see #474.
+* Remove the broken, Python-specific plain-text event view; the Markdown view remains available, see #473.
+* Only accepted team members can join team projects, and send issue alerts only to accepted, active members, see #481.
+* Hide raw exception details from production error responses when `MINIMIZE_INFORMATION_EXPOSURE` is enabled, see
+  #481.
+* Parse `USE_ADMIN` as a boolean in Docker settings, so values such as `False` no longer enable it, see #481.
+* Clean up minidump files from minidump-only envelopes, see 5b09ae57.
+* Correct the artifact-upload authentication error message to name the expected Bearer scheme, see #488.
+* Update `fastjsonschema` to 2.22, see #476.
+* Simplify development by keeping events in the database instead of an event filestore, see 14f24309.
+* Update development-only Tailwind dependencies and keep pre-commit builds in sync with the lockfile, see 03e33bec and
+  f50c0dd8.
 
 ## 2.5.0 (21 July 2026)
 
