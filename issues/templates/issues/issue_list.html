@@ -64,6 +64,12 @@
     </div>
     <div class="ml-auto p-2">
         <form action="." method="get" class="flex flex-wrap items-center justify-end gap-2">
+        {% if environments %}
+        <select id="issue-environment" name="environment" aria-label="{% translate 'Filter by environment' %}" onchange="this.form.submit()" class="bg-slate-50 dark:bg-slate-800 focus:border-cyan-500 dark:focus:border-cyan-400 focus:ring-cyan-200 dark:focus:ring-cyan-700 rounded-md">
+            <option value="">{% translate "All environments" %}</option>
+            {% for env in environments %}<option value="{{ env }}"{% if env == environment %} selected{% endif %}>{{ env }}</option>{% endfor %}
+        </select>
+        {% endif %}
         <select id="issue-sort" name="sort" aria-label="{% translate 'Sort issues' %}" onchange="this.form.submit()" class="bg-slate-50 dark:bg-slate-800 focus:border-cyan-500 dark:focus:border-cyan-400 focus:ring-cyan-200 dark:focus:ring-cyan-700 rounded-md">
             <option value="last_seen"{% if sort == "last_seen" %} selected{% endif %}>{% translate "Last seen" %}</option>
             <option value="events"{% if sort == "events" %} selected{% endif %}>{% translate "Most events" %}</option>
@@ -224,6 +230,8 @@
                 <div class="p-4 text-xl font-bold text-slate-800 dark:text-slate-100">
                 {% if q %}{# a single text is the catch-all for searching w/o results; 'seems enough' because one would generally only search after already having seen some issues (or not), i.e. having seen the relevant message as per below #}
                     No {{ state_filter }} issues found for "{{ q }}"
+                {% elif environment %}
+                    No {{ state_filter }} issues found in "{{ environment }}"
                 {% else %}
                     {% if state_filter == "open" %}
                         {% translate "Congratulations! You have no open issues." %}
