@@ -1,4 +1,6 @@
 import json
+import re
+
 import requests
 from django.utils import timezone
 
@@ -98,11 +100,10 @@ def _store_success_info(service_config_id):
             pass
 
 
-@shared_task
-def slack_backend_send_test_message(webhook_url, project_name, display_name, service_config_id):
+def _build_test_data(project_name, display_name):
     # See Slack's Block Kit Builder
 
-    data = {"text": "Test message by Bugsink to test the webhook setup.",
+    return {"text": "Test message by Bugsink to test the webhook setup.",
             "blocks": [
                 {
                     "type": "header",
@@ -133,6 +134,11 @@ def slack_backend_send_test_message(webhook_url, project_name, display_name, ser
                 }
             ]}
 
+
+@shared_task
+def slack_backend_send_test_message(webhook_url, project_name, display_name, service_config_id):
+    data = _build_test_data(project_name, display_name)
+
     try:
         result = SlackBackend.safe_post(
             webhook_url,
@@ -151,12 +157,7 @@ def slack_backend_send_test_message(webhook_url, project_name, display_name, ser
         _store_failure_info(service_config_id, e)
 
 
-@shared_task
-def slack_backend_send_alert(
-        webhook_url, issue_id, state_description, alert_article, alert_reason, service_config_id, unmute_reason=None):
-
-    issue = Issue.objects.get(id=issue_id)
-
+def _build_alert_data(issue, alert_reason, unmute_reason=None, milestone_reason=None, environment=None):
     issue_url = get_settings().BASE_URL + issue.get_absolute_url()
     title = truncatechars(issue.title().replace("|", ""), 150)
     link = f"<{issue_url}|view on Bugsink>"
@@ -178,14 +179,15 @@ def slack_backend_send_alert(
                 },
                ]
 
-    if unmute_reason:
-        sections.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": unmute_reason,
-            },
-        })
+    for reason in [unmute_reason, milestone_reason]:
+        if reason:
+            sections.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": reason,
+                },
+            })
 
     # assumption: visavis email, project.name is of less importance, because in slack-like things you may (though not
     # always) do one-channel per project. more so for site_title (if you have multiple Bugsinks, you'll surely have
@@ -194,11 +196,8 @@ def slack_backend_send_alert(
         "project": issue.project.name
     }
 
-    # left as a (possible) TODO, because the amount of refactoring (passing event to this function) is too big for now
-    # if event.release:
-    #     fields["release"] = event.release
-    # if event.environment:
-    #     fields["environment"] = event.environment
+    if environment:
+        fields["environment"] = environment
 
     sections += [{"type": "section",
                   "fields": [
@@ -217,7 +216,16 @@ def slack_backend_send_alert(
                 }]
 
     # slack service-backend also support mattermost; mattermost requires at least one text field; use the first section
-    data = {"text": sections[0]["text"]["text"], "blocks": sections}
+    return {"text": sections[0]["text"]["text"], "blocks": sections}
+
+
+@shared_task
+def slack_backend_send_alert(
+        webhook_url, issue_id, state_description, alert_article, alert_reason, service_config_id, unmute_reason=None,
+        milestone_reason=None, environment=None):
+
+    issue = Issue.objects.get(id=issue_id)
+    data = _build_alert_data(issue, alert_reason, unmute_reason, milestone_reason, environment)
 
     try:
         result = SlackBackend.safe_post(
@@ -258,6 +266,127 @@ class SlackBackend(BaseWebhookBackend):
         config = json.loads(self.service_config.config)
         slack_backend_send_alert.delay(
             config["webhook_url"],
+            issue_id,
+            state_description,
+            alert_article,
+            alert_reason,
+            self.service_config.id,
+            **kwargs,
+        )
+
+
+# The Slack bot backend below exists because incoming webhooks (see SlackConfigForm) cannot choose a channel: the
+# channel is baked into the webhook by whoever installed the app. With a bot token (one per Bugsink installation, in
+# the SLACK_BOT_TOKEN setting) the channel is ours to pick, which is what makes per-environment routing useful.
+
+SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
+
+CHANNEL_ID_RE = re.compile(r"[A-Z][A-Z0-9]{4,}")
+
+
+class SlackBotConfigForm(forms.Form):
+    channel_id = forms.CharField(
+        required=True,
+        strip=True,
+        help_text='Channel ID to post to, e.g. "C0123456789" (in Slack: channel name > About > Channel ID). The bot '
+                  'must be a member of the channel.',
+    )
+
+    def __init__(self, *args, **kwargs):
+        config = kwargs.pop("config", None)
+
+        super().__init__(*args, **kwargs)
+        if config:
+            self.fields["channel_id"].initial = config.get("channel_id", "")
+
+    def get_config(self):
+        return {
+            "channel_id": self.cleaned_data.get("channel_id"),
+        }
+
+    def clean_channel_id(self):
+        channel_id = self.cleaned_data["channel_id"]
+        if not CHANNEL_ID_RE.fullmatch(channel_id):
+            raise forms.ValidationError('Channel ID must look like "C0123456789" (not the channel name).')
+        return channel_id
+
+    def clean(self):
+        if not get_settings().SLACK_BOT_TOKEN:
+            raise forms.ValidationError(
+                "SLACK_BOT_TOKEN is not configured for this Bugsink installation; ask your administrator to set it.")
+        return super().clean()
+
+
+def _post_as_bot(data, channel_id, service_config_id):
+    # The token is read here rather than passed in as a task argument: task arguments are stored in the snappea queue
+    # database, and a bot token has no business being there.
+    token = get_settings().SLACK_BOT_TOKEN
+
+    data["channel"] = channel_id
+
+    try:
+        if not token:
+            raise ValueError("SLACK_BOT_TOKEN is not configured")
+
+        result = SlackBotBackend.safe_post(
+            SLACK_POST_MESSAGE_URL,
+            data=json.dumps(data),
+            headers={"Content-Type": "application/json; charset=utf-8", "Authorization": "Bearer " + token},
+        )
+
+        result.raise_for_status()
+
+        # Slack answers 200 OK with {"ok": false, "error": "..."} for anything it doesn't like (unknown channel, bot
+        # not in the channel, bad token), so the status code alone tells us nothing.
+        answer = result.json()
+        if not answer.get("ok"):
+            raise ValueError("Slack said: %s" % answer.get("error", "(no error given)"))
+
+        _store_success_info(service_config_id)
+    except requests.RequestException as e:
+        response = getattr(e, 'response', None)
+        _store_failure_info(service_config_id, e, response)
+
+    except Exception as e:
+        _store_failure_info(service_config_id, e)
+
+
+@shared_task
+def slackbot_backend_send_test_message(channel_id, project_name, display_name, service_config_id):
+    _post_as_bot(_build_test_data(project_name, display_name), channel_id, service_config_id)
+
+
+@shared_task
+def slackbot_backend_send_alert(
+        channel_id, issue_id, state_description, alert_article, alert_reason, service_config_id, unmute_reason=None,
+        milestone_reason=None, environment=None):
+
+    issue = Issue.objects.get(id=issue_id)
+    data = _build_alert_data(issue, alert_reason, unmute_reason, milestone_reason, environment)
+    _post_as_bot(data, channel_id, service_config_id)
+
+
+class SlackBotBackend(BaseWebhookBackend):
+    def __init__(self, service_config):
+        self.service_config = service_config
+
+    @classmethod
+    def get_form_class(cls):
+        return SlackBotConfigForm
+
+    def send_test_message(self):
+        config = json.loads(self.service_config.config)
+        slackbot_backend_send_test_message.delay(
+            config["channel_id"],
+            self.service_config.project.name,
+            self.service_config.display_name,
+            self.service_config.id,
+        )
+
+    def send_alert(self, issue_id, state_description, alert_article, alert_reason, **kwargs):
+        config = json.loads(self.service_config.config)
+        slackbot_backend_send_alert.delay(
+            config["channel_id"],
             issue_id,
             state_description,
             alert_article,

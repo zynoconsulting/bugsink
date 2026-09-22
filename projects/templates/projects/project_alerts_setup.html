@@ -46,6 +46,7 @@
                     <div class="flex items-center">
                         <div class="flex-grow">
                             <a href="{% url "project_messaging_service_edit" project_pk=project.pk service_pk=service_config.pk %}" class="text-xl text-cyan-500 dark:text-cyan-300 font-bold">{{ service_config.display_name }}</a>
+                            <div class="text-sm text-slate-500 dark:text-slate-300">{{ service_config.get_kind_display }} · {% if service_config.environment %}{% blocktranslate with environment=service_config.environment %}environment: {{ environment }}{% endblocktranslate %}{% else %}{% translate "all environments" %}{% endif %}</div>
                             {% if service_config.has_recent_failure %}
                                 <div class="text-sm text-red-600 dark:text-red-400 mt-1">
                                     <span class="inline-flex items-center leading-none">

@@ -52,22 +52,46 @@ def _get_users_for_email_alert(issue):
                 # there is no None at this level
 
 
-@shared_task
-def send_new_issue_alert(issue_id):
-    _send_alert(issue_id, "New issue", "a", "NEW")
+def is_order_of_magnitude(event_count):
+    """True when event_count is exactly a power of ten (10, 100, 1_000, ...), i.e. an order of magnitude was reached."""
+    return event_count >= 10 and event_count == 10 ** (len(str(event_count)) - 1)
 
 
-@shared_task
-def send_regression_alert(issue_id):
-    _send_alert(issue_id, "Regression", "a", "REGRESSED")
-
+# The `environment` parameters below default to "" so that tasks queued by a previous version of Bugsink (which is to
+# say: tasks that are still in the snappea queue across an upgrade) don't fail on an unexpected call signature.
 
 @shared_task
-def send_unmute_alert(issue_id, unmute_reason):
-    _send_alert(issue_id, "Unmuted issue", "an", "UNMUTED", unmute_reason=unmute_reason)
+def send_new_issue_alert(issue_id, environment=""):
+    _send_alert(issue_id, "New issue", "a", "NEW", environment=environment)
 
 
-def _send_alert(issue_id, state_description, alert_article, alert_reason, **kwargs):
+@shared_task
+def send_regression_alert(issue_id, environment=""):
+    _send_alert(issue_id, "Regression", "a", "REGRESSED", environment=environment)
+
+
+@shared_task
+def send_unmute_alert(issue_id, unmute_reason, environment=""):
+    _send_alert(issue_id, "Unmuted issue", "an", "UNMUTED", environment=environment, unmute_reason=unmute_reason)
+
+
+@shared_task
+def send_volume_milestone_alert(issue_id, event_count, environment=""):
+    # Messaging services only (send_email=False): "this issue is an order of magnitude bigger than it was" is a
+    # heads-up that belongs in a chat channel; it's not worth a separate mail to everyone on the project.
+    _send_alert(
+        issue_id, "Volume milestone", "a", "GROWING", environment=environment, send_email=False,
+        milestone_reason="Reached %s events" % f"{event_count:,}")
+
+
+def _matches_environment(service, environment):
+    # A service without an environment gets everything; a service with one only gets that environment's alerts. Note
+    # that this means alerts we cannot attribute to an environment (no environment on the triggering event) only reach
+    # the "all environments" services, which is the desired reading of "this alert is not about your environment".
+    return service.environment == "" or service.environment == environment
+
+
+def _send_alert(issue_id, state_description, alert_article, alert_reason, environment="", send_email=True, **kwargs):
     # NOTE: as it stands, there is a bit of asymmetry here: _send_alert is always called in delayed fashion; it delays
     # some work itself (message backends) though not all (emails). I kept it like this to be able to add functionality
     # without breaking too much (in particular, I like the 3 entry points (send_xx_alert) in the current setup). The
@@ -80,8 +104,15 @@ def _send_alert(issue_id, state_description, alert_article, alert_reason, **kwar
     issue = Issue.objects.get(id=issue_id)
 
     for service in issue.project.service_configs.all():
+        if not _matches_environment(service, environment):
+            continue
+
         service_backend = service.get_backend()
-        service_backend.send_alert(issue_id, state_description, alert_article, alert_reason, **kwargs)
+        service_backend.send_alert(
+            issue_id, state_description, alert_article, alert_reason, environment=environment, **kwargs)
+
+    if not send_email:
+        return
 
     for user in _get_users_for_email_alert(issue):
         send_rendered_email(
