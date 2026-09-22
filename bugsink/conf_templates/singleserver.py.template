@@ -100,6 +100,15 @@ BUGSINK = {
     "USER_REGISTRATION_VERIFY_EMAIL": True,
     "USER_REGISTRATION_VERIFY_EMAIL_EXPIRY": 3 * 24 * 60 * 60,  # 7 days
 
+    # OIDC login: setting OIDC_DISCOVERY_URL (plus client id/secret) turns the login screen into a single "Login with
+    # OIDC" button and turns off logging in with a password. Users are matched (by email) against accounts that already
+    # exist; Bugsink neither creates nor updates accounts on OIDC login. Register BASE_URL + /accounts/oidc/callback/
+    # as the redirect URI with your provider.
+    # "OIDC_DISCOVERY_URL": "https://your-provider.example.com/.well-known/openid-configuration",
+    # "OIDC_CLIENT_ID": "your-client-id",
+    # "OIDC_CLIENT_SECRET": "your-client-secret",
+    # "OIDC_SCOPES": "openid email",
+
     # if True, there is only one team, and all projects are in that team
     "SINGLE_TEAM": False,
     "TEAM_CREATION": CB_MEMBERS,  # who can create new teams. default: members, which means "any member of the site"

@@ -38,6 +38,15 @@ DEFAULTS = {
     "USER_REGISTRATION_VERIFY_EMAIL": True,
     "USER_REGISTRATION_VERIFY_EMAIL_EXPIRY": 3 * 24 * 60 * 60,  # 7 days
 
+    # OIDC login: setting OIDC_DISCOVERY_URL (plus client id/secret) turns the login screen into a single "Login with
+    # OIDC" button and turns off logging in with a password. Users are matched (by email) against accounts that already
+    # exist; Bugsink neither creates nor updates accounts on OIDC login. The redirect URI to register with your
+    # provider is BASE_URL + /accounts/oidc/callback/
+    "OIDC_DISCOVERY_URL": "",
+    "OIDC_CLIENT_ID": "",
+    "OIDC_CLIENT_SECRET": "",
+    "OIDC_SCOPES": "openid email",
+
     # if True, there is only one team, and all projects are in that team
     "SINGLE_TEAM": False,
     "TEAM_CREATION": CB_MEMBERS,  # who can create new teams. default: members, which means "any member of the site"
@@ -148,6 +157,12 @@ def _sanitize(settings):
         settings["SINGLE_TEAM"] = True
         settings["USER_REGISTRATION"] = CB_NOBODY
         settings["TEAM_CREATION"] = CB_NOBODY
+
+    if settings["OIDC_DISCOVERY_URL"]:
+        assert_(
+            settings["OIDC_CLIENT_ID"] and settings["OIDC_CLIENT_SECRET"],
+            "OIDC_DISCOVERY_URL requires OIDC_CLIENT_ID and OIDC_CLIENT_SECRET to be set"
+        )
 
     settings["ALERTS_WEBHOOK_OUTBOUND_MODE"] = settings["ALERTS_WEBHOOK_OUTBOUND_MODE"].lower()
     assert_(
