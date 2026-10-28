@@ -2,7 +2,7 @@ from django.core.exceptions import BadRequest
 
 import zlib
 import io
-import brotli
+import brotli_rs as brotli
 
 from bugsink.app_settings import get_settings
 from bugsink.utils import assert_
@@ -43,15 +43,25 @@ def zlib_generator(input_stream, wbits, chunk_size=DEFAULT_CHUNK_SIZE):
         if not compressed_chunk:
             break
 
-        yield z.decompress(compressed_chunk)
+        while compressed_chunk and not z.eof:
+            data = z.decompress(compressed_chunk, max_length=chunk_size)
+            compressed_chunk = z.unconsumed_tail
+            if data:
+                yield data
 
-    yield z.flush()
+    while True:
+        data = z.decompress(b"", max_length=chunk_size)
+        if not data:
+            break
+        yield data
+
+    if not z.eof:
+        raise zlib.error("Incomplete compressed stream")
 
 
 def brotli_generator(input_stream, chunk_size=DEFAULT_CHUNK_SIZE):
     # implementation notes: in principle chunk_size for input and output could be different, we keep them the same here.
-    # I've also seen that the actual output data may be quite a bit larger than the output_buffer_limit; a detail that
-    # I do not fully understand (but I understand that at least it's not _unboundedly_ larger).
+    # brotli-rs treats output_buffer_limit as a strict per-call limit.
 
     # The brotli_assertions in the below are designed to guarantee that progress towards termination is made. In short:
     # when no progress is made on the input_stream, either progress must be made on the output_stream or we must be in
@@ -169,6 +179,9 @@ def content_encoding_reader(request):
         )
 
     if encoding == "br":
+        if not get_settings().FEATURE_BROTLI:
+            raise BadRequest("Brotli content encoding is disabled")
+
         return GeneratorReader(
             brotli_generator(request._stream),
             bad_request_exceptions=(brotli.error, BrotliError)
@@ -179,16 +192,18 @@ def content_encoding_reader(request):
 
 def handle_request_content_encoding(request, max_length):
     """Turns a request w/ Content-Encoding into an unpacked equivalent; for further "regular" (POST, FILES) handling
-    by Django.
+    by Django. Limits the decoded request body, including requests without Content-Encoding.
     """
 
+    assert_(not request._read_started)
     encoding = request.META.get("HTTP_CONTENT_ENCODING", "").lower()
     if encoding in ["gzip", "deflate", "br"]:
-        assert_(not request._read_started)
-        request._stream = MaxDataReader(max_length, content_encoding_reader(request))
+        request._stream = content_encoding_reader(request)
 
         request.META["CONTENT_LENGTH"] = str(pow(2, 32) - 1)  # large enough (we can't predict the decompressed value)
         request.META.pop("HTTP_CONTENT_ENCODING")  # the resulting request is no longer encoded
+
+    request._stream = MaxDataReader(max_length, request._stream)
 
 
 def compress_with_zlib(input_stream, wbits, chunk_size=DEFAULT_CHUNK_SIZE):

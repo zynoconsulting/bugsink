@@ -1408,6 +1408,21 @@ class TestGoogleChatBackendErrorHandling(DjangoTestCase):
         self.assertRegex(payload["text"], r"<https?://.+\|view on Bugsink>")
 
 
+    @patch("alerts.service_backends.base.BaseWebhookBackend.safe_post")
+    def test_google_chat_receives_environment_and_volume_alerts(self, mock_post):
+        mock_post.return_value = self._ok_response()
+        issue, _ = get_or_create_issue(project=self.project)
+
+        send_volume_milestone_alert(str(issue.id), 1000, "prod <primary>")
+
+        payload = json.loads(mock_post.call_args.kwargs["data"])
+        self.assertIn("GROWING issue", payload["text"])
+        self.assertIn("*Volume*: Reached 1,000 events", payload["text"])
+        self.assertIn(r"*Environment*: prod \<primary\>", payload["text"])
+        self.config.refresh_from_db()
+        self.assertIsNone(self.config.last_failure_timestamp)
+
+
 class TestEnvironmentRouting(DjangoTestCase):
     """A messaging service with an environment set only gets that environment's alerts."""
 

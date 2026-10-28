@@ -267,6 +267,9 @@ class SearchParserTestCase(RegularTestCase):
     def test_parser_supports_escaped_backslashes(self):
         self.assertEqual(({"key": "a \\ value"}, ""), parse_query(r'key:"a \\ value"'))
 
+    def test_parser_supports_quoted_keys(self):
+        self.assertEqual(({"bugsink:release": "1.2"}, ""), parse_query('"bugsink:release":"1.2"'))
+
     def test_parser_ignores_colons_inside_quotes(self):
         self.assertEqual(({"key": "value"}, '"not:a tag"'), parse_query('"not:a tag" key:value'))
 
@@ -376,6 +379,9 @@ class SearchTestCase(DjangoTestCase):
 
     def test_search_issues(self):
         self._test_search(lambda query: search_issues(self.project, Issue.objects.all(), query))
+
+    def test_search_issues_without_project(self):
+        self._test_search(lambda query: search_issues(None, Issue.objects.all(), query))
 
     def test_search_issues_by_url(self):
         issue, _ = get_or_create_issue(project=self.project, event_data=create_event_data("url"))

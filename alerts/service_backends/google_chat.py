@@ -110,7 +110,8 @@ def google_chat_backend_send_test_message(webhook_url, project_name, display_nam
 
 @shared_task
 def google_chat_backend_send_alert(
-        webhook_url, issue_id, state_description, alert_article, alert_reason, service_config_id, unmute_reason=None):
+        webhook_url, issue_id, state_description, alert_article, alert_reason, service_config_id, unmute_reason=None,
+        milestone_reason=None, environment=None):
     issue = Issue.objects.get(id=issue_id)
     issue_url = get_settings().BASE_URL + issue.get_absolute_url()
     text = (
@@ -121,6 +122,10 @@ def google_chat_backend_send_alert(
     )
     if unmute_reason:
         text += f"\n*Unmute Reason*: {_safe_markdown(unmute_reason)}"
+    if milestone_reason:
+        text += f"\n*Volume*: {_safe_markdown(milestone_reason)}"
+    if environment:
+        text += f"\n*Environment*: {_safe_markdown(environment)}"
     _post_text(webhook_url, text, service_config_id)
 
 

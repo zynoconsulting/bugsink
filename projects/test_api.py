@@ -17,6 +17,7 @@ class ProjectApiTests(TransactionTestCase):
         self.team = Team.objects.create(name="Engineering")
 
     def test_list_orders_by_name_and_hides_deleted(self):
+        # This also proves that an installation-wide token can still list multiple projects.
         Project.objects.create(team=self.team, name="Zebra")
         Project.objects.create(team=self.team, name="Alpha")
         Project.objects.create(team=self.team, name="Gamma", is_deleted=True)
@@ -35,6 +36,40 @@ class ProjectApiTests(TransactionTestCase):
         self.assertEqual(r.status_code, 200)
         names = [row["name"] for row in r.json()["results"]]
         self.assertEqual(names, ["A1"])
+
+    def test_project_bound_token_lists_only_its_project(self):
+        bound_project = Project.objects.create(team=self.team, name="Bound project")
+        Project.objects.create(team=self.team, name="Other project")
+        token = AuthToken.objects.create(
+            is_project_bound=True,
+            project=bound_project,
+            projects_read=True,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.token}")
+
+        response = self.client.get(reverse("api:project-list"))
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([bound_project.id], [row["id"] for row in response.json()["results"]])
+
+    def test_project_bound_token_cannot_retrieve_another_project(self):
+        bound_project = Project.objects.create(team=self.team, name="Bound project")
+        other_project = Project.objects.create(team=self.team, name="Other project")
+        token = AuthToken.objects.create(
+            is_project_bound=True,
+            project=bound_project,
+            projects_read=True,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.token}")
+
+        response = self.client.get(reverse("api:project-detail", args=[other_project.id]))
+
+        self.assertEqual(403, response.status_code)
+        self.assertEqual("This token is not allowed to access this project.", response.json()["detail"])
+        response = self.client.get(reverse("api:project-event-counts", args=[bound_project.id]))
+        self.assertEqual(200, response.status_code)
+        response = self.client.get(reverse("api:project-event-counts", args=[other_project.id]))
+        self.assertEqual(403, response.status_code)
 
     def test_create_requires_team_and_name(self):
         r1 = self.client.post(reverse("api:project-list"), {"name": "ProjOnly"}, format="json")
@@ -176,6 +211,11 @@ class ProjectApiTests(TransactionTestCase):
             "This project is not visible to the user bound to this token.",
             hidden_detail.json()["detail"],
         )
+        for project in [member_project, team_project, visible_project]:
+            response = self.client.get(reverse("api:project-event-counts", args=[project.id]))
+            self.assertEqual(200, response.status_code)
+        response = self.client.get(reverse("api:project-event-counts", args=[hidden_project.id]))
+        self.assertEqual(403, response.status_code)
 
     def test_personal_team_admin_can_create_and_update_projects(self):
         user = get_user_model().objects.create_user(username="project-team-admin")

@@ -142,16 +142,16 @@ class AuthTokenFormTestCase(TransactionTestCase):
         self.assertFalse(form.is_valid())
         self.assertEqual(["Select at least one capability."], form.non_field_errors())
 
-    def test_project_token_cannot_manage_projects_or_teams(self):
+    def test_project_token_cannot_have_a_capability_unboundable_by_project(self):
         project = Project.objects.create(name="One project")
         form = AuthTokenForm({
             "description": "Bad project token",
             "project": project.pk,
-            "projects_read": True,
+            "projects_manage": True,
         }, user=self.superuser)
 
         self.assertFalse(form.is_valid())
-        self.assertIn("Project-bound tokens cannot have capabilities: projects:read.", form.errors["project"])
+        self.assertIn("Project-bound tokens cannot have capabilities: projects:manage.", form.errors["project"])
 
     def test_personal_tokens_are_tied_to_the_requesting_user(self):
         normal_user_form = AuthTokenForm({
@@ -188,11 +188,12 @@ class AuthTokenListTestCase(TransactionTestCase):
 
         self.assertContains(response, "•" * 40, count=2)
         self.assertContains(response, f'id="token-hidden-{token_1.pk}"')
-        self.assertContains(response, f'id="token-revealed-{token_1.pk}" class="hidden font-mono"')
+        self.assertContains(response, f'id="token-revealed-{token_1.pk}" class="hidden font-mono js-copy-source"')
         self.assertContains(response, f'id="token-toggle-{token_1.pk}"')
         self.assertContains(response, f'id="token-hidden-{token_2.pk}"')
-        self.assertContains(response, f'id="token-revealed-{token_2.pk}" class="hidden font-mono"')
+        self.assertContains(response, f'id="token-revealed-{token_2.pk}" class="hidden font-mono js-copy-source"')
         self.assertContains(response, f'id="token-toggle-{token_2.pk}"')
+        self.assertContains(response, '<a href="#" aria-label="Copy" title="Copy" class="js-copy-btn', count=2)
 
     def test_superuser_can_create_an_installation_service_token(self):
         response = self.client.post(reverse("auth_token_create"), {

@@ -1,10 +1,13 @@
 from rest_framework import viewsets
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes
 
 from bugsink.api_pagination import AscDescCursorPagination
 from bugsink.api_capabilities import lookup, token_guard
 from bugsink.api_mixins import ExpandViewSetMixin, AtomicRequestMixin
+from events.api_counts import EventCountRangeSerializer, EventCountsSerializer, event_counts_response
+from events.models import ProjectEventCountsPerHour
 
 from .models import Project, projects_visible_to_user
 from .serializers import (
@@ -28,7 +31,7 @@ class ProjectViewSet(AtomicRequestMixin, ExpandViewSetMixin, viewsets.ModelViewS
     http_method_names = ["get", "post", "patch", "head", "options"]
     pagination_class = ProjectPagination
 
-    @token_guard("projects:read")
+    @token_guard("projects:read", scopable_by_bound_project=True)
     @extend_schema(
         summary="List projects",
         description="List projects ordered by name.",
@@ -42,7 +45,8 @@ class ProjectViewSet(AtomicRequestMixin, ExpandViewSetMixin, viewsets.ModelViewS
             ),
         ]
     )
-    def list(self, request, *args, **kwargs):
+    def list(self, request, bound_project, *args, **kwargs):
+        self.bound_project = bound_project
         return super().list(request, *args, **kwargs)
 
     @token_guard("projects:manage", guarding_team=lookup(serializer="team"))
@@ -76,6 +80,21 @@ class ProjectViewSet(AtomicRequestMixin, ExpandViewSetMixin, viewsets.ModelViewS
     def retrieve(self, request, project, *args, **kwargs):
         return Response(self.get_serializer(project).data)
 
+    @token_guard("projects:read", guarding_project=lookup(url="pk"))
+    @extend_schema(
+        summary="Retrieve project event counts",
+        description=(
+            "Hourly counts by digest time, including evicted events. Empty hours have count zero. "
+            "Defaults to 24 hours, including the incomplete current hour. "
+            "Ranges must use UTC hour boundaries and fall within the last 90 days."
+        ),
+        parameters=[EventCountRangeSerializer],
+        responses=EventCountsSerializer,
+    )
+    @action(detail=True, methods=["get"], url_path="event-counts", pagination_class=None)
+    def event_counts(self, request, project, pk=None):
+        return event_counts_response(ProjectEventCountsPerHour.objects.filter(project=project), request.query_params)
+
     @token_guard("projects:manage", guarding_project=lookup(url="pk"))
     @extend_schema(
         summary="Update a project",
@@ -96,6 +115,8 @@ class ProjectViewSet(AtomicRequestMixin, ExpandViewSetMixin, viewsets.ModelViewS
 
         # Hide soft-deleted in lists
         qs = queryset.filter(is_deleted=False)
+        if self.bound_project is not None:
+            qs = qs.filter(pk=self.bound_project.pk)
         if self.request.auth.is_user_bound:
             qs = projects_visible_to_user(qs, self.request.auth.user)
 
