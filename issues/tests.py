@@ -4,13 +4,13 @@ import inspect
 import uuid
 import json
 import hashlib
-import gzip
+import gzip  # intentionally uses C-zlib to test compatibility with the Rust codec
 from io import BytesIO, StringIO
 from glob import glob
 from unittest import TestCase as RegularTestCase
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile  # intentionally uses C-zlib to test compatibility with the Rust codec
 
 from django.test import TestCase as DjangoTestCase
 from django.contrib.auth import get_user_model
@@ -803,8 +803,10 @@ class ViewTests(TransactionTestCase):
             size=len(good_sourcemap),
             data=good_sourcemap,
         )
-        FileMetadata.objects.create(file=broken_file, debug_id=broken_debug_id, file_type="source_map", data="{}")
-        FileMetadata.objects.create(file=good_file, debug_id=good_debug_id, file_type="source_map", data="{}")
+        FileMetadata.objects.create(
+            project=self.project, file=broken_file, debug_id=broken_debug_id, file_type="source_map", data="{}")
+        FileMetadata.objects.create(
+            project=self.project, file=good_file, debug_id=good_debug_id, file_type="source_map", data="{}")
 
         class FakeMapping:
             source = "good-source.ts"
@@ -903,7 +905,8 @@ class ViewTests(TransactionTestCase):
             size=len(sourcemap),
             data=sourcemap,
         )
-        FileMetadata.objects.create(file=sourcemap_file, debug_id=debug_id, file_type="source_map", data="{}")
+        FileMetadata.objects.create(
+            project=self.project, file=sourcemap_file, debug_id=debug_id, file_type="source_map", data="{}")
 
         class FakeMapping:
             source = "good-source.ts"
@@ -970,7 +973,8 @@ class ViewTests(TransactionTestCase):
             size=len(sourcemap),
             data=sourcemap,
         )
-        FileMetadata.objects.create(file=sourcemap_file, debug_id=debug_id, file_type="source_map", data="{}")
+        FileMetadata.objects.create(
+            project=self.project, file=sourcemap_file, debug_id=debug_id, file_type="source_map", data="{}")
 
         class FakeMapping:
             source = "good-source.ts"

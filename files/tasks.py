@@ -7,7 +7,7 @@ import json
 from hashlib import sha1
 from os.path import basename
 from django.utils import timezone
-from django.db.models import Count, Sum
+from django.db.models import Count, Sum, Q
 
 from compat.timestamp import parse_timestamp
 from snappea.decorators import shared_task
@@ -20,13 +20,14 @@ from bugsink.streams import copy_stream_limited, MaxLengthExceeded
 from bugsink.timed_sqlite_backend.base import allow_long_running_queries
 
 from .models import (
+    ASSEMBLY_ERROR_MAX_AGE,
     ArtifactBundleAssembly,
     Chunk,
     DifAssembly,
     File,
     FileMetadata,
     write_fileobj_to_storage,
-    _binary_to_bytes,
+    write_to_storage,
 )
 from .minidump import extract_dif_kind
 from .storage_registry import get_write_storage
@@ -37,7 +38,7 @@ logger = logging.getLogger("bugsink.api")
 
 # budget is not yet tuned; reasons for high values: we're dealing with "leaves in the model-dep-tree here"; reasons for
 # low values: deletion of files might just be expensive.
-VACUUM_FILES_BATCH_SIZE = 500
+VACUUM_FILES_BATCH_SIZE = 50
 
 # At roughly 200-500 bytes per file (reasonable enough for paths), 50 MiB accommodates about 100,000-250,000 files,
 # which "should be enough" for non-pathalogical use-cases.
@@ -51,6 +52,25 @@ IN_CODE_DEBUG_ID_REGEX = re.compile(
     rb'e\._sentryDebugIds\[.*?\]\s*=\s*["\']([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})["\']'
 )
 DEBUG_ID_SCAN_TAIL_SIZE = 64 * 1024
+
+
+def create_chunk(checksum, data):
+    # a snug fit around the only DB-writing thing we do here to ensure minimal blocking
+    with immediate_atomic():
+        write_storage = get_write_storage("chunk")
+        chunk, created = Chunk.objects.defer("data").get_or_create(
+            checksum=checksum,
+            defaults={
+                "size": len(data),
+                "data": b"" if write_storage is not None else data,
+                "storage_backend": None if write_storage is None else write_storage.name,
+            })
+
+        if created and write_storage is not None:
+            # Keep the write inside immediate_atomic so other requests cannot see an incomplete chunk.
+            write_to_storage("chunk", checksum, data)
+
+    return chunk, created
 
 
 def create_file_from_local_file(checksum, filename, size, local_file):
@@ -105,6 +125,7 @@ def assemble_dif(assembly_id, chunk_checksums, filename):
         with immediate_atomic():
             assemblies.update(
                 state=ChunkFileState.ERROR,
+                error_at=timezone.now(),
                 detail="Could not assemble this debug file. Check the server logs for details.",
             )
         capture_or_log_exception(e, logger)
@@ -263,11 +284,12 @@ def assemble_artifact_bundle(bundle_checksum, chunk_checksums, project_ids):
         process_artifact_bundle(bundle_checksum, chunk_checksums, active_project_ids)
     except (AssembledFileTooLarge, MaxLengthExceeded) as e:
         with immediate_atomic():
-            assemblies.update(state=ChunkFileState.ERROR, detail=str(e))
+            assemblies.update(state=ChunkFileState.ERROR, error_at=timezone.now(), detail=str(e))
     except Exception as e:
         with immediate_atomic():
             assemblies.update(
                 state=ChunkFileState.ERROR,
+                error_at=timezone.now(),
                 detail="Could not assemble this artifact bundle. Check the server logs for details.",
             )
         capture_or_log_exception(e, logger)
@@ -313,7 +335,7 @@ def assemble_file(checksum, chunk_checksums, filename):
             size = 0
 
             for chunk in chunks_in_order:
-                chunk_data = _binary_to_bytes(chunk.data)
+                chunk_data = chunk.get_raw_data()
                 next_size = size + len(chunk_data)
                 if next_size > max_file_size:
                     raise AssembledFileTooLarge("Assembled file exceeds MAX_FILE_SIZE")
@@ -414,13 +436,14 @@ def vacuum_files_batch(chunk_max_days=1, file_max_days=90, max_file_count=None, 
         num_deleted = 0
         chunk_cutoff = now - timedelta(days=chunk_max_days)
         file_cutoff = now - timedelta(days=file_max_days)
+        error_cutoff = now - ASSEMBLY_ERROR_MAX_AGE
 
-        # Keep upload statuses for as long as chunks are kept. Otherwise a failed or interrupted task could make every
-        # later upload attempt return "error" or "assembling". Deleting the status allows another attempt;
-        # it does not delete a successfully stored File.
+        # The upload endpoints also expire errors so retries don't have to wait for vacuum.
         for assembly_model in (DifAssembly, ArtifactBundleAssembly):
             assembly_ids = list(
-                assembly_model.objects.filter(created_at__lt=chunk_cutoff)
+                assembly_model.objects.filter(
+                    Q(state=ChunkFileState.ERROR, error_at__lt=error_cutoff)
+                    | (~Q(state=ChunkFileState.ERROR) & Q(created_at__lt=chunk_cutoff)))
                 .values_list("id", flat=True)[:VACUUM_FILES_BATCH_SIZE - num_deleted]
             )
             assembly_model.objects.filter(id__in=assembly_ids).delete()

@@ -1,5 +1,37 @@
 # Changes
 
+## 2.7.0 (unreleased)
+
+### Backwards incompatible changes
+
+Bugsink 2.7.0 removes the fallback for previously uploaded projectless sourcemap and native debug-file uploads.
+
+This fallback was introduced in Bugsink 2.2.0, when the requirement for a project to be specified in the upload request
+was added. The upgrade infers projects from retained events' Debug IDs where possible, preserving existing
+project-scoped mappings.  However, this is not always possible, so some existing uploads (from pre-2.2.0 times), which
+do not have a project assigned, may not survive the upgrade.
+
+## 2.6.3 (6 November 2026)
+
+### Security
+
+Replace the C Brotli decoder with Rust-based `brotli-rs` to reduce security risks. See #566.
+Brotli decoding can now be disabled with `FEATURE_BROTLI=False` (`FEATURE_BROTLI=false` in Docker). See #568.
+
+### Installation messages
+
+Superusers can now receive and dismiss messages from Bugsink, such as upgrade notices, through the existing
+phonehome connection. See #177.
+
+### Smaller fixes
+
+* Speed up minidump processing by unwinding stacks only once, using `symalot`. See #576.
+* Keep debug files and source bundles that are still being used for minidumps from expiring. See #571.
+* Report source-map upload status and assembly failures to `sentry-cli`. See #563.
+* Allow upload chunks to use object storage instead of the database. See #575.
+* Reduce file cleanup batches to shorten database write transactions. See #574.
+* Reject incomplete gzip and deflate request bodies. See #567.
+
 ## 2.6.2 (22 October 2026)
 
 ### Security
