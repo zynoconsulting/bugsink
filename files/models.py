@@ -1,5 +1,6 @@
 import logging
 from contextlib import contextmanager
+from datetime import timedelta
 from io import BytesIO
 from django.db import models
 from django.db import transaction
@@ -17,22 +18,14 @@ from .object_kinds import (
 
 logger = logging.getLogger("bugsink.objectstorage")
 
+ASSEMBLY_ERROR_MAX_AGE = timedelta(minutes=1)
+
 
 def _binary_to_bytes(value):
     # psycopg may return BinaryField values as memoryview objects; callers here expect plain bytes.
     if isinstance(value, memoryview):
         return bytes(value)
     return value
-
-
-class Chunk(models.Model):
-    checksum = models.CharField(max_length=40, unique=True)  # unique implies index, which we also use for lookups
-    size = models.PositiveIntegerField()
-    data = models.BinaryField(null=False)  # as with Events, we can "eventually" move this out of the database
-    created_at = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
-
-    def __str__(self):
-        return self.checksum
 
 
 class DifAssembly(models.Model):
@@ -42,6 +35,7 @@ class DifAssembly(models.Model):
     debug_id = models.UUIDField(null=True, blank=True)
     state = models.CharField(max_length=16, default=ChunkFileState.ASSEMBLING)
     detail = models.CharField(max_length=255, blank=True, default="")
+    error_at = models.DateTimeField(null=True, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
     # null=True because we set file only after successful assembly and registration.
     # CASCADE: the simply correct solution, assumed to be performant enough
@@ -69,6 +63,7 @@ class ArtifactBundleAssembly(models.Model):
     checksum = models.CharField(max_length=40)
     state = models.CharField(max_length=16, default=ChunkFileState.CREATED)
     detail = models.CharField(max_length=255, blank=True, default="")
+    error_at = models.DateTimeField(null=True, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
 
     class Meta:
@@ -111,6 +106,41 @@ class StorageAwareQuerySet(models.QuerySet):
             cleanup_objects_on_storage((object_kind, key, storage_backend) for key, storage_backend in todos)
 
         return result
+
+
+class Chunk(models.Model):
+    checksum = models.CharField(max_length=40, unique=True)  # unique implies index, which we also use for lookups
+    size = models.PositiveIntegerField()
+    data = models.BinaryField(null=False)
+    storage_backend = models.CharField(max_length=255, blank=True, null=True, default=None, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
+
+    objects = StorageAwareQuerySet.as_manager()
+
+    def __str__(self):
+        return self.checksum
+
+    @contextmanager
+    def open_for_read(self):
+        _, key, _, storage = resolve_storage_for_instance(self)
+
+        if storage is None:
+            yield BytesIO(_binary_to_bytes(self.data))
+            return
+
+        with storage.open(key, "rb") as f:
+            yield f
+
+    def get_raw_data(self):
+        with self.open_for_read() as f:
+            return f.read()
+
+    def delete(self, *args, **kwargs):
+        object_kind, key, storage_backend = get_storage_todo_for_instance(self)
+        if storage_backend is not None:
+            cleanup_objects_on_storage([(object_kind, key, storage_backend)])
+
+        return super().delete(*args, **kwargs)
 
 
 class File(models.Model):
@@ -188,7 +218,7 @@ class FileMetadata(models.Model):
     # FileMetadata as provided by the client (e.g. in a manifest); security-wise any facts noted here are not guaranteed
     # to be correct / cannot be trusted. Our security boundary is: FileMetadata is bound to a Project, so you can only
     # pollute your own Project's FileMetadata.
-    project = models.ForeignKey("projects.Project", null=True, blank=True, on_delete=models.DO_NOTHING)
+    project = models.ForeignKey("projects.Project", on_delete=models.DO_NOTHING)
 
     # debug_id & file_type nullability: such data exists in manifest.json; we are future-proof for it although we
     # currently don't store it as such.
@@ -202,22 +232,10 @@ class FileMetadata(models.Model):
         return f"debug_id: {self.debug_id} ({self.file_type})"
 
     class Meta:
-        # The below is basically the ["project", "debug_id", "file_type"] uniqueness constraint we want, but with a
-        # twist to allow legacy data without project. We can remove the legacy constraint after a long transition
-        # period, e.g. May 2027, at which point the first constraint can be simplified to a normal uniqueness constraint
-        # on the three fields. (just the single unique_together constraint doesn't work because of the nullability of
-        # project, which would allow multiple entries with the same debug_id and file_type but null project because
-        # nulls are not considered equal in SQL)
         constraints = [
             models.UniqueConstraint(
                 fields=["project", "debug_id", "file_type"],
-                condition=Q(project__isnull=False, debug_id__isnull=False, file_type__isnull=False),
                 name="filemeta_project_debug_type",
-            ),
-            models.UniqueConstraint(
-                fields=["debug_id", "file_type"],
-                condition=Q(project__isnull=True, debug_id__isnull=False, file_type__isnull=False),
-                name="filemeta_legacy_debug_type",
             ),
         ]
 
@@ -232,7 +250,7 @@ def get_file_metadata_for_debug_ids(project, debug_ids, file_type, *, defer_file
     if defer_file_data:
         queryset = queryset.defer("file__data")
 
-    result = {
+    return {
         metadata.debug_id: metadata
         for metadata in queryset.filter(
             project=project,
@@ -240,21 +258,6 @@ def get_file_metadata_for_debug_ids(project, debug_ids, file_type, *, defer_file
             file_type=file_type,
         )
     }
-
-    missing_debug_ids = debug_ids - set(result)
-    if missing_debug_ids:
-        # Compatibility for sourcemaps/debug files uploaded before project-scoped metadata existed. This keeps old
-        # installs working for now, but should be removed after a long transition period, e.g. May 2027.
-        result.update({
-            metadata.debug_id: metadata
-            for metadata in queryset.filter(
-                project__isnull=True,
-                debug_id__in=missing_debug_ids,
-                file_type=file_type,
-            )
-        })
-
-    return result
 
 
 def get_file_metadata_for_debug_id(project, debug_id, file_type):
